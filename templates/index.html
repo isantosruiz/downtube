@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DownTube - Descarga de YouTube</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>DownTube</h1>
+      <p class="subtitle">Descarga videos de YouTube en la calidad disponible que elijas.</p>
+
+      <section class="card">
+        <label for="url">URL de YouTube</label>
+        <input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." />
+        <button id="loadFormats">Cargar calidades</button>
+
+        <div id="videoInfo" class="video-info hidden">
+          <img id="thumb" alt="Miniatura del video" />
+          <div>
+            <h2 id="title"></h2>
+            <p id="uploader"></p>
+          </div>
+        </div>
+
+        <form id="downloadForm" class="hidden" method="POST" action="/api/download">
+          <input type="hidden" name="url" id="formUrl" />
+
+          <label for="formatSelect">Formato / Resolución</label>
+          <select id="formatSelect" name="format_selector" required></select>
+
+          <label for="containerSelect">Contenedor de salida</label>
+          <select id="containerSelect" name="target_container" required>
+            <option value="mp4" selected>MP4 (recomendado)</option>
+            <option value="mkv">MKV</option>
+            <option value="original">Original del stream</option>
+          </select>
+
+          <button type="submit">Descargar</button>
+        </form>
+
+        <p id="status" class="status"></p>
+      </section>
+    </main>
+    <footer class="copyright">
+      &copy; 2026, <a href="https://isantosruiz.github.io/home/" target="_blank" rel="noopener noreferrer">Ildeberto de los Santos Ruiz</a>
+    </footer>
+
+    <script>
+      const loadBtn = document.getElementById('loadFormats');
+      const urlInput = document.getElementById('url');
+      const status = document.getElementById('status');
+      const videoInfo = document.getElementById('videoInfo');
+      const titleEl = document.getElementById('title');
+      const uploaderEl = document.getElementById('uploader');
+      const thumbEl = document.getElementById('thumb');
+      const downloadForm = document.getElementById('downloadForm');
+      const formatSelect = document.getElementById('formatSelect');
+      const formUrl = document.getElementById('formUrl');
+      const submitBtn = downloadForm.querySelector('button[type="submit"]');
+
+      function setStatus(msg, isError = false) {
+        status.textContent = msg;
+        status.classList.toggle('error', isError);
+      }
+
+      function resetFormats() {
+        formatSelect.innerHTML = '';
+        downloadForm.classList.add('hidden');
+        videoInfo.classList.add('hidden');
+      }
+
+      function getFilenameFromDisposition(disposition) {
+        if (!disposition) return 'video.bin';
+        const utf8Match = disposition.match(/filename\\*=UTF-8''([^;]+)/i);
+        if (utf8Match && utf8Match[1]) return decodeURIComponent(utf8Match[1]);
+        const simpleMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+        if (simpleMatch && simpleMatch[1]) return simpleMatch[1];
+        return 'video.bin';
+      }
+
+      loadBtn.addEventListener('click', async () => {
+        const url = urlInput.value.trim();
+        resetFormats();
+
+        if (!url) {
+          setStatus('Introduce una URL válida.', true);
+          return;
+        }
+
+        setStatus('Cargando formatos...');
+        loadBtn.disabled = true;
+
+        try {
+          const response = await fetch('/api/formats', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+          });
+
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.error || 'Error desconocido');
+          }
+
+          titleEl.textContent = data.title || 'Video';
+          uploaderEl.textContent = data.uploader || '';
+          thumbEl.src = data.thumbnail || '';
+          thumbEl.style.display = data.thumbnail ? 'block' : 'none';
+          videoInfo.classList.remove('hidden');
+
+          data.formats.forEach((fmt) => {
+            const option = document.createElement('option');
+            option.value = fmt.format_selector || fmt.format_id;
+            option.textContent = `${fmt.label} (id: ${fmt.format_id})`;
+            formatSelect.appendChild(option);
+          });
+
+          formUrl.value = url;
+          downloadForm.classList.remove('hidden');
+          setStatus(`Se encontraron ${data.formats.length} formatos.`);
+        } catch (err) {
+          setStatus(`No se pudo cargar el video: ${err.message}`, true);
+        } finally {
+          loadBtn.disabled = false;
+        }
+      });
+
+      downloadForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        submitBtn.disabled = true;
+        setStatus('Preparando descarga...');
+
+        try {
+          const formData = new FormData(downloadForm);
+          const response = await fetch('/api/download', {
+            method: 'POST',
+            body: formData
+          });
+
+          if (!response.ok) {
+            let errorMessage = 'No se pudo completar la descarga.';
+            try {
+              const errData = await response.json();
+              errorMessage = errData.error || errorMessage;
+            } catch (_ignore) {}
+            throw new Error(errorMessage);
+          }
+
+          const blob = await response.blob();
+          const disposition = response.headers.get('content-disposition');
+          const filename = getFilenameFromDisposition(disposition);
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+
+          setStatus('Descarga completada.');
+          setTimeout(() => setStatus(''), 2500);
+        } catch (err) {
+          setStatus(`No se pudo descargar el video: ${err.message}`, true);
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
